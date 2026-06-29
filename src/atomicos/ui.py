@@ -13,6 +13,11 @@ from atomicos.vault import VaultManager
 from atomicos.workflow import NoteWorkflow, WorkflowInput, WorkflowResult
 
 
+def _border_all(width: int, color: str) -> ft.Border:
+    side = ft.BorderSide(width, color)
+    return ft.Border(top=side, right=side, bottom=side, left=side)
+
+
 def launch_app(config: AppConfig) -> None:
     ft.app(target=lambda page: build_page(page, config))
 
@@ -107,7 +112,7 @@ def build_page(page: ft.Page, config: AppConfig) -> None:
     left_panel = ft.Container(
         expand=3,
         padding=16,
-        border=ft.border.all(1, "#12333a"),
+        border=_border_all(1, "#12333a"),
         bgcolor="#071014",
         content=ft.Column(
             [
@@ -121,7 +126,7 @@ def build_page(page: ft.Page, config: AppConfig) -> None:
     right_panel = ft.Container(
         expand=2,
         padding=16,
-        border=ft.border.all(1, "#243040"),
+        border=_border_all(1, "#243040"),
         bgcolor="#090b12",
         content=ft.Column(
             [
