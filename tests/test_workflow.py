@@ -12,8 +12,8 @@ class FakeInference:
         self.error = error
         self.calls = []
 
-    def synthesize(self, raw_text: str) -> str:
-        self.calls.append(raw_text)
+    def synthesize(self, raw_text: str, *, run_id: str | None = None) -> str:
+        self.calls.append((raw_text, run_id))
         if self.error:
             raise self.error
         return self.markdown
@@ -25,8 +25,16 @@ class FakePersistence:
         self.error = error
         self.calls = []
 
-    def create_note(self, selected_folder: str, optional_subfolder: str, title: str, markdown: str) -> str:
-        self.calls.append((selected_folder, optional_subfolder, title, markdown))
+    def create_note(
+        self,
+        selected_folder: str,
+        optional_subfolder: str,
+        title: str,
+        markdown: str,
+        *,
+        run_id: str | None = None,
+    ) -> str:
+        self.calls.append((selected_folder, optional_subfolder, title, markdown, run_id))
         if self.error:
             raise self.error
         return self.target
@@ -43,8 +51,9 @@ def test_workflow_success_persists_note_and_signals_editor_clear():
     assert result.success is True
     assert result.clear_editor is True
     assert result.target_path == "Conhecimento/Java/SOLID"
-    assert inference.calls == ["raw"]
-    assert persistence.calls == [("Conhecimento", "Java", "SOLID", "# Clean note")]
+    assert inference.calls[0][0] == "raw"
+    assert persistence.calls[0][:4] == ("Conhecimento", "Java", "SOLID", "# Clean note")
+    assert inference.calls[0][1] == persistence.calls[0][4]
     assert logs == [
         "[INFO] Iniciando sintese para 'SOLID'...",
         "[WAIT] Aguardando inferencia no Pop!_OS...",
@@ -85,6 +94,7 @@ def test_workflow_inference_failure_preserves_input_for_retry():
     assert result.success is False
     assert result.clear_editor is False
     assert result.target_path is None
+    assert result.message == "ollama down"
 
 
 def test_workflow_persistence_failure_preserves_input_for_retry():
@@ -95,4 +105,30 @@ def test_workflow_persistence_failure_preserves_input_for_retry():
 
     assert result.success is False
     assert result.clear_editor is False
-    assert persistence.calls == [("Folder", "", "Title", "# Note")]
+    assert persistence.calls[0][:4] == ("Folder", "", "Title", "# Note")
+
+
+def test_workflow_recoverable_failure_logs_run_id_for_retry():
+    logs = []
+    workflow = NoteWorkflow(FakeInference(error=InferenceError("ollama down")), FakePersistence(), logs.append)
+
+    result = workflow.run(WorkflowInput("Raw", "Title", "Folder"))
+
+    assert result.success is False
+    assert result.clear_editor is False
+    assert logs[-1].startswith("[ERROR] run_id=")
+    assert "ollama down" in logs[-1]
+
+
+def test_workflow_unexpected_failure_preserves_input_for_retry(caplog):
+    logs = []
+    workflow = NoteWorkflow(FakeInference(error=RuntimeError("boom")), FakePersistence(), logs.append)
+
+    result = workflow.run(WorkflowInput("Raw", "Title", "Folder"))
+
+    assert result.success is False
+    assert result.clear_editor is False
+    assert result.message == "Unexpected workflow failure"
+    assert logs[-1].startswith("[ERROR] run_id=")
+    assert "Unexpected workflow failure" in logs[-1]
+    assert "workflow unexpected failure" in caplog.text
