@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import re
 from typing import Any
 
 import requests
 
 from atomicos.config import OllamaConfig
+from atomicos.diagnostics import Timer, get_logger
 from atomicos.errors import InferenceError
+
+
+logger = get_logger("ollama")
 
 
 ATOMIC_NOTE_INSTRUCTION = """You are atomicOS, a local technical note synthesizer.
@@ -17,6 +22,12 @@ Use Portuguese when the source text is Portuguese, otherwise keep the source lan
 Return only Markdown content, with a concise title, summary, key points, and practical examples when useful.
 Do not wrap the response in a Markdown code fence.
 """.strip()
+
+
+@dataclass(frozen=True)
+class ReadinessResult:
+    available: bool
+    message: str
 
 
 class OllamaClient:
@@ -40,8 +51,42 @@ class OllamaClient:
             },
         }
 
-    def synthesize(self, raw_text: str) -> str:
+    def check_readiness(self, timeout_seconds: float = 2.0) -> ReadinessResult:
+        """Check whether Ollama is reachable without sending note content."""
+
+        url = f"{self.config.base_url.rstrip('/')}/api/tags"
+        timer = Timer.start()
+        try:
+            response = self.session.get(url, timeout=timeout_seconds)
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("readiness payload is not an object")
+        except (requests.Timeout, requests.RequestException, ValueError) as exc:
+            logger.warning(
+                "ollama readiness failed base_url=%s model=%s timeout=%s duration_ms=%s error=%s",
+                self.config.base_url,
+                self.config.model,
+                timeout_seconds,
+                timer.elapsed_ms(),
+                exc,
+                exc_info=True,
+            )
+            return ReadinessResult(False, f"Ollama unavailable: {exc}")
+
+        logger.info(
+            "ollama readiness succeeded base_url=%s model=%s timeout=%s duration_ms=%s",
+            self.config.base_url,
+            self.config.model,
+            timeout_seconds,
+            timer.elapsed_ms(),
+        )
+        return ReadinessResult(True, "Ollama is reachable")
+
+    def synthesize(self, raw_text: str, *, run_id: str | None = None) -> str:
         url = f"{self.config.base_url.rstrip('/')}/api/generate"
+        timer = Timer.start()
+        response: Any | None = None
         try:
             response = self.session.post(
                 url,
@@ -50,20 +95,77 @@ class OllamaClient:
             )
             response.raise_for_status()
         except requests.Timeout as exc:
+            logger.warning(
+                "run_id=%s ollama request timed out base_url=%s model=%s timeout=%s duration_ms=%s raw_input_bytes=%s",
+                run_id,
+                self.config.base_url,
+                self.config.model,
+                self.config.timeout_seconds,
+                timer.elapsed_ms(),
+                len(raw_text.encode("utf-8")),
+                exc_info=True,
+            )
             raise InferenceError("Ollama request timed out") from exc
         except requests.RequestException as exc:
+            logger.warning(
+                "run_id=%s ollama request failed base_url=%s model=%s timeout=%s status_code=%s duration_ms=%s raw_input_bytes=%s error=%s",
+                run_id,
+                self.config.base_url,
+                self.config.model,
+                self.config.timeout_seconds,
+                _status_code(response),
+                timer.elapsed_ms(),
+                len(raw_text.encode("utf-8")),
+                exc,
+                exc_info=True,
+            )
             raise InferenceError(f"Ollama request failed: {exc}") from exc
 
         try:
             payload = response.json()
         except ValueError as exc:
+            logger.warning(
+                "run_id=%s ollama malformed json base_url=%s model=%s timeout=%s status_code=%s duration_ms=%s raw_input_bytes=%s response_bytes=%s",
+                run_id,
+                self.config.base_url,
+                self.config.model,
+                self.config.timeout_seconds,
+                _status_code(response),
+                timer.elapsed_ms(),
+                len(raw_text.encode("utf-8")),
+                _response_size(response),
+                exc_info=True,
+            )
             raise InferenceError("Ollama returned malformed JSON") from exc
 
         content = payload.get("response")
         if not isinstance(content, str) or not content.strip():
+            logger.warning(
+                "run_id=%s ollama unusable content base_url=%s model=%s timeout=%s status_code=%s duration_ms=%s raw_input_bytes=%s response_bytes=%s",
+                run_id,
+                self.config.base_url,
+                self.config.model,
+                self.config.timeout_seconds,
+                _status_code(response),
+                timer.elapsed_ms(),
+                len(raw_text.encode("utf-8")),
+                _response_size(response),
+            )
             raise InferenceError("Ollama response did not contain usable content")
 
-        return clean_markdown_response(content)
+        cleaned = clean_markdown_response(content)
+        logger.info(
+            "run_id=%s ollama request succeeded base_url=%s model=%s timeout=%s status_code=%s duration_ms=%s raw_input_bytes=%s response_bytes=%s",
+            run_id,
+            self.config.base_url,
+            self.config.model,
+            self.config.timeout_seconds,
+            _status_code(response),
+            timer.elapsed_ms(),
+            len(raw_text.encode("utf-8")),
+            _response_size(response),
+        )
+        return cleaned
 
 
 def clean_markdown_response(content: str) -> str:
@@ -78,3 +180,19 @@ def clean_markdown_response(content: str) -> str:
         raise InferenceError("Ollama response was empty after cleanup")
 
     return cleaned
+
+
+def _status_code(response: Any | None) -> str | int:
+    return getattr(response, "status_code", "unknown") if response is not None else "unknown"
+
+
+def _response_size(response: Any | None) -> int:
+    if response is None:
+        return 0
+    text = getattr(response, "text", None)
+    if isinstance(text, str):
+        return len(text.encode("utf-8"))
+    content = getattr(response, "content", None)
+    if isinstance(content, bytes):
+        return len(content)
+    return 0

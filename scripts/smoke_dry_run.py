@@ -4,12 +4,20 @@ from atomicos.workflow import NoteWorkflow, WorkflowInput
 
 
 class DryRunInference:
-    def synthesize(self, raw_text: str) -> str:
+    def synthesize(self, raw_text: str, *, run_id: str | None = None) -> str:
         return f"# Dry Run\n\n{raw_text}"
 
 
 class DryRunPersistence:
-    def create_note(self, selected_folder: str, optional_subfolder: str, title: str, markdown: str) -> str:
+    def create_note(
+        self,
+        selected_folder: str,
+        optional_subfolder: str,
+        title: str,
+        markdown: str,
+        *,
+        run_id: str | None = None,
+    ) -> str:
         parts = [selected_folder]
         if optional_subfolder:
             parts.append(optional_subfolder)

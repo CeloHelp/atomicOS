@@ -8,9 +8,18 @@ from threading import Thread
 import flet as ft
 
 from atomicos.config import AppConfig
-from atomicos.ollama import OllamaClient
+from atomicos.diagnostics import get_logger
+from atomicos.ollama import OllamaClient, ReadinessResult
 from atomicos.vault import VaultManager
 from atomicos.workflow import NoteWorkflow, WorkflowInput, WorkflowResult
+
+
+logger = get_logger("ui")
+
+
+def _border_all(width: int, color: str) -> ft.Border:
+    side = ft.BorderSide(width, color)
+    return ft.Border(top=side, right=side, bottom=side, left=side)
 
 
 def launch_app(config: AppConfig) -> None:
@@ -80,20 +89,33 @@ def build_page(page: ft.Page, config: AppConfig) -> None:
             append_log("[ERROR] Nenhuma pasta encontrada no Vault configurado")
         page.update()
 
+    def check_ai_readiness() -> None:
+        try:
+            result = ollama.check_readiness()
+        except Exception:  # noqa: BLE001 - startup diagnostics should warn, not block Vault loading.
+            logger.exception("Unexpected AI readiness check failure")
+            result = ReadinessResult(False, "AI readiness check failed unexpectedly")
+        append_log(format_readiness_log(result))
+
     def run_workflow() -> None:
-        workflow = NoteWorkflow(ollama, vault, append_log)
-        result: WorkflowResult = workflow.run(
-            WorkflowInput(
-                raw_text=raw_editor.value or "",
-                title=title_field.value or "",
-                selected_folder=folder_dropdown.value or "",
-                optional_subfolder=subfolder_field.value or "",
+        try:
+            workflow = NoteWorkflow(ollama, vault, append_log)
+            result: WorkflowResult = workflow.run(
+                WorkflowInput(
+                    raw_text=raw_editor.value or "",
+                    title=title_field.value or "",
+                    selected_folder=folder_dropdown.value or "",
+                    optional_subfolder=subfolder_field.value or "",
+                )
             )
-        )
-        if result.clear_editor:
-            raw_editor.value = ""
-            update_byte_counter()
-        set_busy(False)
+            if result.clear_editor:
+                raw_editor.value = ""
+                update_byte_counter()
+        except Exception:  # noqa: BLE001 - background thread must not leave the UI busy forever.
+            logger.exception("Unexpected background workflow failure")
+            append_log("[ERROR] Falha inesperada durante a sintese. Consulte os logs tecnicos.")
+        finally:
+            set_busy(False)
 
     def on_synthesize(_: ft.ControlEvent) -> None:
         if synthesize_button.disabled:
@@ -107,7 +129,7 @@ def build_page(page: ft.Page, config: AppConfig) -> None:
     left_panel = ft.Container(
         expand=3,
         padding=16,
-        border=ft.border.all(1, "#12333a"),
+        border=_border_all(1, "#12333a"),
         bgcolor="#071014",
         content=ft.Column(
             [
@@ -121,7 +143,7 @@ def build_page(page: ft.Page, config: AppConfig) -> None:
     right_panel = ft.Container(
         expand=2,
         padding=16,
-        border=ft.border.all(1, "#243040"),
+        border=_border_all(1, "#243040"),
         bgcolor="#090b12",
         content=ft.Column(
             [
@@ -139,4 +161,11 @@ def build_page(page: ft.Page, config: AppConfig) -> None:
     )
 
     page.add(ft.Row([left_panel, right_panel], expand=True, spacing=16))
+    check_ai_readiness()
     load_folders()
+
+
+def format_readiness_log(result: ReadinessResult) -> str:
+    if result.available:
+        return "[OK] Backend de IA acessivel"
+    return "[WARN] Backend de IA indisponivel; a sintese pode falhar ate iniciar ou reconfigurar o Ollama"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import subprocess
 
 import pytest
@@ -55,7 +56,8 @@ def test_build_target_rejects_unsafe_paths(tmp_path, folder, subfolder, title):
         manager.build_target(folder, subfolder, title)
 
 
-def test_create_note_invokes_cli_with_argument_array(tmp_path):
+def test_create_note_invokes_cli_with_argument_array(tmp_path, caplog):
+    caplog.set_level(logging.INFO)
     calls = []
 
     def runner(command, **kwargs):
@@ -70,23 +72,46 @@ def test_create_note_invokes_cli_with_argument_array(tmp_path):
     assert (tmp_path / "Conhecimento" / "Java").is_dir()
     assert calls[0]["command"] == ["obsidian", "note:create", "Conhecimento/Java/SOLID", "--content", "# SOLID"]
     assert calls[0]["kwargs"]["cwd"] == str(tmp_path)
+    assert "obsidian cli succeeded" in caplog.text
+    assert "Conhecimento/Java/SOLID" in caplog.text
+    assert "# SOLID" not in caplog.text
 
 
-def test_create_note_reports_cli_failure(tmp_path):
+def test_create_note_reports_cli_failure(tmp_path, caplog):
     def runner(command, **kwargs):
-        return subprocess.CompletedProcess(command, 2, stdout="", stderr="boom")
+        return subprocess.CompletedProcess(command, 2, stdout="x" * 600, stderr="boom")
 
     manager = VaultManager(tmp_path, runner=runner)
 
     with pytest.raises(PersistenceError, match="boom"):
-        manager.create_note("Conhecimento", "", "Note", "content")
+        manager.create_note("Conhecimento", "", "Note", "SECRET_MARKDOWN")
+
+    assert "obsidian cli failed" in caplog.text
+    assert "<omitted>" in caplog.text
+    assert "SECRET_MARKDOWN" not in caplog.text
+    assert "truncated" in caplog.text
 
 
-def test_create_note_reports_missing_cli(tmp_path):
+def test_create_note_reports_missing_cli(tmp_path, caplog):
     def runner(command, **kwargs):
         raise FileNotFoundError("obsidian")
 
     manager = VaultManager(tmp_path, runner=runner)
 
     with pytest.raises(PersistenceError, match="execute Obsidian CLI"):
+        manager.create_note("Conhecimento", "", "Note", "SECRET_MARKDOWN")
+
+    assert "obsidian cli execution failed" in caplog.text
+    assert "<omitted>" in caplog.text
+    assert "SECRET_MARKDOWN" not in caplog.text
+
+
+def test_create_note_logs_target_directory_creation_failure(tmp_path, caplog):
+    (tmp_path / "Conhecimento").write_text("not a directory")
+    manager = VaultManager(tmp_path)
+
+    with pytest.raises(PersistenceError, match="target directories"):
         manager.create_note("Conhecimento", "", "Note", "content")
+
+    assert "vault target directory creation failed" in caplog.text
+    assert "Conhecimento" in caplog.text

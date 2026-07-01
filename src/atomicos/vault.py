@@ -7,7 +7,11 @@ from pathlib import Path, PurePosixPath
 import subprocess
 from typing import Callable, Sequence
 
+from atomicos.diagnostics import Timer, get_logger, sanitize_command, truncate_value
 from atomicos.errors import ConfigurationError, PersistenceError
+
+
+logger = get_logger("vault")
 
 
 RunCommand = Callable[..., subprocess.CompletedProcess[str]]
@@ -59,11 +63,33 @@ class VaultManager:
 
         return NoteTarget(relative_path=relative.as_posix(), absolute_parent=absolute_note.parent)
 
-    def create_note(self, selected_folder: str, optional_subfolder: str, title: str, markdown: str) -> str:
+    def create_note(
+        self,
+        selected_folder: str,
+        optional_subfolder: str,
+        title: str,
+        markdown: str,
+        *,
+        run_id: str | None = None,
+    ) -> str:
         target = self.build_target(selected_folder, optional_subfolder, title)
+        logger.info(
+            "run_id=%s vault target prepared vault_root=%s relative_path=%s parent=%s",
+            run_id,
+            self.vault_root,
+            target.relative_path,
+            target.absolute_parent,
+        )
         try:
             target.absolute_parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
+            logger.exception(
+                "run_id=%s vault target directory creation failed vault_root=%s parent=%s relative_path=%s",
+                run_id,
+                self.vault_root,
+                target.absolute_parent,
+                target.relative_path,
+            )
             raise PersistenceError(f"Could not create target directories: {exc}") from exc
 
         command = [
@@ -73,6 +99,7 @@ class VaultManager:
             "--content",
             markdown,
         ]
+        timer = Timer.start()
         try:
             result = self.runner(
                 command,
@@ -82,12 +109,43 @@ class VaultManager:
                 check=False,
             )
         except OSError as exc:
+            logger.exception(
+                "run_id=%s obsidian cli execution failed vault_root=%s relative_path=%s command=%s duration_ms=%s error=%s",
+                run_id,
+                self.vault_root,
+                target.relative_path,
+                sanitize_command(command),
+                timer.elapsed_ms(),
+                exc,
+            )
             raise PersistenceError(f"Could not execute Obsidian CLI: {exc}") from exc
 
+        duration_ms = timer.elapsed_ms()
         if result.returncode != 0:
+            logger.warning(
+                "run_id=%s obsidian cli failed vault_root=%s relative_path=%s command=%s returncode=%s duration_ms=%s stdout=%r stderr=%r",
+                run_id,
+                self.vault_root,
+                target.relative_path,
+                sanitize_command(command),
+                result.returncode,
+                duration_ms,
+                truncate_value(result.stdout),
+                truncate_value(result.stderr),
+            )
             cause = (result.stderr or result.stdout or "Obsidian CLI failed").strip()
             raise PersistenceError(cause)
 
+        logger.info(
+            "run_id=%s obsidian cli succeeded vault_root=%s relative_path=%s returncode=%s duration_ms=%s stdout=%r stderr=%r",
+            run_id,
+            self.vault_root,
+            target.relative_path,
+            result.returncode,
+            duration_ms,
+            truncate_value(result.stdout),
+            truncate_value(result.stderr),
+        )
         return target.relative_path
 
     def _existing_root(self) -> Path:
