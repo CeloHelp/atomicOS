@@ -94,10 +94,9 @@ class VaultManager:
 
         command = [
             self.obsidian_executable,
-            "note:create",
-            target.relative_path,
-            "--content",
-            markdown,
+            "create",
+            f"path={target.relative_path}",
+            f"content={markdown}",
         ]
         timer = Timer.start()
         try:
@@ -177,6 +176,8 @@ def _safe_title(title: str) -> str:
     safe = "".join("-" if char in forbidden else char for char in stripped).strip()
     if not safe:
         raise PersistenceError("Target title is unsafe")
+    if not safe.lower().endswith(".md"):
+        safe = f"{safe}.md"
     return safe
 
 

@@ -35,7 +35,7 @@ def test_build_target_returns_safe_nested_destination(tmp_path):
         "Single Responsibility Principle",
     )
 
-    assert target.relative_path == "Conhecimento/Java/SOLID/Principios/Single Responsibility Principle"
+    assert target.relative_path == "Conhecimento/Java/SOLID/Principios/Single Responsibility Principle.md"
     assert target.absolute_parent == tmp_path.resolve() / "Conhecimento" / "Java" / "SOLID" / "Principios"
 
 
@@ -68,13 +68,28 @@ def test_create_note_invokes_cli_with_argument_array(tmp_path, caplog):
 
     relative = manager.create_note("Conhecimento", "Java", "SOLID", "# SOLID")
 
-    assert relative == "Conhecimento/Java/SOLID"
+    assert relative == "Conhecimento/Java/SOLID.md"
     assert (tmp_path / "Conhecimento" / "Java").is_dir()
-    assert calls[0]["command"] == ["obsidian", "note:create", "Conhecimento/Java/SOLID", "--content", "# SOLID"]
+    assert calls[0]["command"] == ["obsidian", "create", "path=Conhecimento/Java/SOLID.md", "content=# SOLID"]
     assert calls[0]["kwargs"]["cwd"] == str(tmp_path)
     assert "obsidian cli succeeded" in caplog.text
-    assert "Conhecimento/Java/SOLID" in caplog.text
+    assert "Conhecimento/Java/SOLID.md" in caplog.text
     assert "# SOLID" not in caplog.text
+
+
+def test_create_note_does_not_duplicate_md_extension(tmp_path):
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    manager = VaultManager(tmp_path, runner=runner)
+
+    relative = manager.create_note("Conhecimento", "Java", "SOLID.md", "# SOLID")
+
+    assert relative == "Conhecimento/Java/SOLID.md"
+    assert calls[0][2] == "path=Conhecimento/Java/SOLID.md"
 
 
 def test_create_note_reports_cli_failure(tmp_path, caplog):

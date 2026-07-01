@@ -75,7 +75,7 @@ Before a real end-to-end run, confirm these machine-specific values:
 
 - The exact Windows Vault root path for `ATOMICOS_VAULT_ROOT`
 - The Pop!_OS Ollama LAN URL and port for `ATOMICOS_OLLAMA_BASE_URL`
-- Whether this machine's Obsidian CLI command is `obsidian` and supports `note:create <path> --content <markdown>`
+- Whether this machine's Obsidian CLI command is `obsidian` and supports `obsidian create path="..." content="..."`
 
 ## Tests
 

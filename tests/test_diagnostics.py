@@ -6,9 +6,18 @@ from atomicos.diagnostics import CONTENT_PLACEHOLDER, sanitize_command, truncate
 def test_sanitize_command_omits_content_value():
     secret_markdown = "# Private note\nraw sensitive generated markdown"
 
-    sanitized = sanitize_command(["obsidian", "note:create", "Folder/Note", "--content", secret_markdown])
+    sanitized = sanitize_command(["obsidian", "create", "path=Folder/Note.md", "--content", secret_markdown])
 
-    assert sanitized == ["obsidian", "note:create", "Folder/Note", "--content", CONTENT_PLACEHOLDER]
+    assert sanitized == ["obsidian", "create", "path=Folder/Note.md", "--content", CONTENT_PLACEHOLDER]
+    assert secret_markdown not in " ".join(sanitized)
+
+
+def test_sanitize_command_omits_content_assignment():
+    secret_markdown = "# Private note\nraw sensitive generated markdown"
+
+    sanitized = sanitize_command(["obsidian", "create", "path=Folder/Note.md", f"content={secret_markdown}"])
+
+    assert sanitized == ["obsidian", "create", "path=Folder/Note.md", f"content={CONTENT_PLACEHOLDER}"]
     assert secret_markdown not in " ".join(sanitized)
 
 
