@@ -73,6 +73,9 @@ def sanitize_command(command: Sequence[str]) -> list[str]:
             sanitized.append(CONTENT_PLACEHOLDER)
             skip_next = False
             continue
+        if part.startswith("content="):
+            sanitized.append(f"content={CONTENT_PLACEHOLDER}")
+            continue
         sanitized.append(part)
         if part == "--content":
             skip_next = True

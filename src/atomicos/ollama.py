@@ -21,6 +21,7 @@ Convert the raw notes into one clear atomic Markdown note.
 Use Portuguese when the source text is Portuguese, otherwise keep the source language.
 Return only Markdown content, with a concise title, summary, key points, and practical examples when useful.
 Do not wrap the response in a Markdown code fence.
+Do not add explanations, prefaces, or commentary outside the final note.
 """.strip()
 
 
@@ -169,12 +170,16 @@ class OllamaClient:
 
 
 def clean_markdown_response(content: str) -> str:
-    """Remove whole-response Markdown fences and reject empty cleanup results."""
+    """Remove Markdown fences and reject empty cleanup results."""
 
     cleaned = content.strip()
     match = re.fullmatch(r"```(?:markdown|md)?\s*\n(?P<body>.*?)\n```", cleaned, re.DOTALL | re.IGNORECASE)
     if match:
         cleaned = match.group("body").strip()
+    else:
+        match = re.match(r"```(?:markdown|md)?\s*\n(?P<body>.*?)\n```", cleaned, re.DOTALL | re.IGNORECASE)
+        if match:
+            cleaned = match.group("body").strip()
 
     if not cleaned:
         raise InferenceError("Ollama response was empty after cleanup")

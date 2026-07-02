@@ -11,11 +11,22 @@ from atomicos.vault import VaultManager
 
 def test_list_folders_returns_nested_relative_paths(tmp_path):
     (tmp_path / "Conhecimento" / "Java" / "SOLID").mkdir(parents=True)
+    (tmp_path / "Conhecimento" / "Java" / "SOLID" / "Note.md").write_text("# Note")
     (tmp_path / ".obsidian").mkdir()
 
     folders = VaultManager(tmp_path).list_folders()
 
     assert folders == ["Conhecimento", "Conhecimento/Java", "Conhecimento/Java/SOLID"]
+
+
+def test_list_folders_excludes_empty_directories(tmp_path):
+    (tmp_path / "Conhecimento" / "Empty").mkdir(parents=True)
+    (tmp_path / "Conhecimento" / "With Note").mkdir(parents=True)
+    (tmp_path / "Conhecimento" / "With Note" / "Note.md").write_text("# Note")
+
+    folders = VaultManager(tmp_path).list_folders()
+
+    assert folders == ["Conhecimento", "Conhecimento/With Note"]
 
 
 def test_list_folders_rejects_unavailable_root(tmp_path):
@@ -35,7 +46,7 @@ def test_build_target_returns_safe_nested_destination(tmp_path):
         "Single Responsibility Principle",
     )
 
-    assert target.relative_path == "Conhecimento/Java/SOLID/Principios/Single Responsibility Principle"
+    assert target.relative_path == "Conhecimento/Java/SOLID/Principios/Single Responsibility Principle.md"
     assert target.absolute_parent == tmp_path.resolve() / "Conhecimento" / "Java" / "SOLID" / "Principios"
 
 
@@ -68,13 +79,28 @@ def test_create_note_invokes_cli_with_argument_array(tmp_path, caplog):
 
     relative = manager.create_note("Conhecimento", "Java", "SOLID", "# SOLID")
 
-    assert relative == "Conhecimento/Java/SOLID"
+    assert relative == "Conhecimento/Java/SOLID.md"
     assert (tmp_path / "Conhecimento" / "Java").is_dir()
-    assert calls[0]["command"] == ["obsidian", "note:create", "Conhecimento/Java/SOLID", "--content", "# SOLID"]
+    assert calls[0]["command"] == ["obsidian", "create", "path=Conhecimento/Java/SOLID.md", "content=# SOLID"]
     assert calls[0]["kwargs"]["cwd"] == str(tmp_path)
     assert "obsidian cli succeeded" in caplog.text
-    assert "Conhecimento/Java/SOLID" in caplog.text
+    assert "Conhecimento/Java/SOLID.md" in caplog.text
     assert "# SOLID" not in caplog.text
+
+
+def test_create_note_does_not_duplicate_md_extension(tmp_path):
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    manager = VaultManager(tmp_path, runner=runner)
+
+    relative = manager.create_note("Conhecimento", "Java", "SOLID.md", "# SOLID")
+
+    assert relative == "Conhecimento/Java/SOLID.md"
+    assert calls[0][2] == "path=Conhecimento/Java/SOLID.md"
 
 
 def test_create_note_reports_cli_failure(tmp_path, caplog):
@@ -90,6 +116,20 @@ def test_create_note_reports_cli_failure(tmp_path, caplog):
     assert "<omitted>" in caplog.text
     assert "SECRET_MARKDOWN" not in caplog.text
     assert "truncated" in caplog.text
+
+
+def test_create_note_removes_new_empty_directories_after_cli_failure(tmp_path):
+    def runner(command, **kwargs):
+        return subprocess.CompletedProcess(command, 2, stdout="", stderr="boom")
+
+    (tmp_path / "Conhecimento").mkdir()
+    manager = VaultManager(tmp_path, runner=runner)
+
+    with pytest.raises(PersistenceError, match="boom"):
+        manager.create_note("Conhecimento", "New Folder/Nested", "Note", "content")
+
+    assert (tmp_path / "Conhecimento").is_dir()
+    assert not (tmp_path / "Conhecimento" / "New Folder").exists()
 
 
 def test_create_note_reports_missing_cli(tmp_path, caplog):

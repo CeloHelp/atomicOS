@@ -77,6 +77,18 @@ def test_synthesize_extracts_and_cleans_response():
     assert session.calls[0]["timeout"] == 9
 
 
+def test_clean_markdown_response_extracts_initial_fenced_note_and_drops_commentary():
+    response = """```markdown
+# WAF
+
+Resumo sobre firewall de aplicacao web.
+```
+
+Este texto explica a nota acima."""
+
+    assert clean_markdown_response(response) == "# WAF\n\nResumo sobre firewall de aplicacao web."
+
+
 def test_readiness_success_uses_tags_endpoint_without_note_content(caplog):
     caplog.set_level(logging.INFO)
     session = FakeSession(get_result=FakeResponse({"models": []}))
