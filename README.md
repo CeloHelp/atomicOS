@@ -2,6 +2,8 @@
 
 atomicOS is a local Python/Flet desktop app that turns rough notes into atomic Markdown notes and persists them into an Obsidian Vault through the Obsidian CLI.
 
+Repository: https://github.com/CeloHelp/atomicOS
+
 ## Requirements
 
 - Python 3.11+

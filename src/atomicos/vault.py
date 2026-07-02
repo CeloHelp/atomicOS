@@ -40,7 +40,11 @@ class VaultManager:
         root = self._existing_root()
         folders: list[str] = []
         for path in root.rglob("*"):
-            if path.is_dir() and not _is_hidden_part(path.relative_to(root)):
+            if (
+                path.is_dir()
+                and not _is_hidden_part(path.relative_to(root))
+                and _contains_visible_markdown(path, root)
+            ):
                 folders.append(path.relative_to(root).as_posix())
         return sorted(folders)
 
@@ -81,6 +85,7 @@ class VaultManager:
             target.absolute_parent,
         )
         try:
+            created_directories = _missing_directories(root=self._existing_root(), parent=target.absolute_parent)
             target.absolute_parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             logger.exception(
@@ -121,6 +126,7 @@ class VaultManager:
 
         duration_ms = timer.elapsed_ms()
         if result.returncode != 0:
+            _remove_empty_directories(created_directories, run_id=run_id)
             logger.warning(
                 "run_id=%s obsidian cli failed vault_root=%s relative_path=%s command=%s returncode=%s duration_ms=%s stdout=%r stderr=%r",
                 run_id,
@@ -183,3 +189,33 @@ def _safe_title(title: str) -> str:
 
 def _is_hidden_part(path: Path) -> bool:
     return any(part.startswith(".") for part in path.parts)
+
+
+def _contains_visible_markdown(path: Path, root: Path) -> bool:
+    for child in path.rglob("*"):
+        if (
+            child.is_file()
+            and child.suffix.lower() == ".md"
+            and not _is_hidden_part(child.relative_to(root))
+        ):
+            return True
+    return False
+
+
+def _missing_directories(root: Path, parent: Path) -> list[Path]:
+    missing: list[Path] = []
+    relative_parent = parent.relative_to(root)
+    current = root
+    for part in relative_parent.parts:
+        current = current / part
+        if not current.exists():
+            missing.append(current)
+    return missing
+
+
+def _remove_empty_directories(paths: Sequence[Path], *, run_id: str | None = None) -> None:
+    for path in reversed(paths):
+        try:
+            path.rmdir()
+        except OSError:
+            logger.info("run_id=%s leaving non-empty or unavailable directory in place path=%s", run_id, path)

@@ -11,11 +11,22 @@ from atomicos.vault import VaultManager
 
 def test_list_folders_returns_nested_relative_paths(tmp_path):
     (tmp_path / "Conhecimento" / "Java" / "SOLID").mkdir(parents=True)
+    (tmp_path / "Conhecimento" / "Java" / "SOLID" / "Note.md").write_text("# Note")
     (tmp_path / ".obsidian").mkdir()
 
     folders = VaultManager(tmp_path).list_folders()
 
     assert folders == ["Conhecimento", "Conhecimento/Java", "Conhecimento/Java/SOLID"]
+
+
+def test_list_folders_excludes_empty_directories(tmp_path):
+    (tmp_path / "Conhecimento" / "Empty").mkdir(parents=True)
+    (tmp_path / "Conhecimento" / "With Note").mkdir(parents=True)
+    (tmp_path / "Conhecimento" / "With Note" / "Note.md").write_text("# Note")
+
+    folders = VaultManager(tmp_path).list_folders()
+
+    assert folders == ["Conhecimento", "Conhecimento/With Note"]
 
 
 def test_list_folders_rejects_unavailable_root(tmp_path):
@@ -105,6 +116,20 @@ def test_create_note_reports_cli_failure(tmp_path, caplog):
     assert "<omitted>" in caplog.text
     assert "SECRET_MARKDOWN" not in caplog.text
     assert "truncated" in caplog.text
+
+
+def test_create_note_removes_new_empty_directories_after_cli_failure(tmp_path):
+    def runner(command, **kwargs):
+        return subprocess.CompletedProcess(command, 2, stdout="", stderr="boom")
+
+    (tmp_path / "Conhecimento").mkdir()
+    manager = VaultManager(tmp_path, runner=runner)
+
+    with pytest.raises(PersistenceError, match="boom"):
+        manager.create_note("Conhecimento", "New Folder/Nested", "Note", "content")
+
+    assert (tmp_path / "Conhecimento").is_dir()
+    assert not (tmp_path / "Conhecimento" / "New Folder").exists()
 
 
 def test_create_note_reports_missing_cli(tmp_path, caplog):
