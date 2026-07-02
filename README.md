@@ -4,6 +4,10 @@ atomicOS é um assistente desktop local para transformar anotações soltas em n
 
 Ele roda como um app Python/Flet, envia solicitações de síntese para um servidor Ollama local ou acessível pela rede local, e salva o Markdown final por meio da CLI do Obsidian. A ideia central é simples: manter o fluxo de escrita rápido, estruturado e privado usando uma IA local em vez de depender de uma API de LLM hospedada na nuvem.
 
+## Preview da Interface
+
+![Interface do atomicOS](docs/images/interface.png)
+
 ## Por Que atomicOS
 
 - Fluxo com IA local-first: usa Ollama, então as notas podem ser sintetizadas por um modelo rodando na sua própria máquina ou na sua rede local.
