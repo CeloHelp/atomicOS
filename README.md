@@ -11,7 +11,8 @@ Ele roda como um app Python/Flet, envia solicitações de síntese para um servi
 ## Por Que atomicOS
 
 - Fluxo com IA local-first: usa Ollama, então as notas podem ser sintetizadas por um modelo rodando na sua própria máquina ou na sua rede local.
-- Saída nativa para Obsidian: cria arquivos `.md` comuns diretamente no seu Vault.
+- Saída nativa para Obsidian: cria ou complementa arquivos `.md` comuns diretamente no seu Vault.
+- Persistência inteligente: pesquisa o Vault antes de gravar, faz append quando a nota alvo já existe e grava metadados via propriedades do Obsidian.
 - Estrutura de nota atômica: transforma entradas bagunçadas em notas focadas com título, resumo, pontos-chave e exemplos práticos quando útil.
 - Interface desktop: oferece uma UI simples em Flet para selecionar pastas do Vault, inserir anotações e criar notas sem sair do app.
 - Configuração flexível: aceita variáveis de ambiente ou um arquivo local `atomicos.toml`.
@@ -22,8 +23,11 @@ Ele roda como um app Python/Flet, envia solicitações de síntese para um servi
 1. Você cola anotações soltas no atomicOS.
 2. O atomicOS envia o texto para o Ollama usando o modelo local configurado.
 3. O Ollama retorna uma nota Markdown sintetizada.
-4. O atomicOS grava a nota na pasta selecionada do Vault por meio da CLI do Obsidian.
-5. A nota aparece no Obsidian como um arquivo Markdown normal.
+4. O atomicOS pesquisa a pasta alvo do Vault usando a CLI do Obsidian.
+5. Se a nota alvo já existir, o conteúdo sintetizado é anexado com `append`.
+6. Se a nota alvo ainda não existir, o arquivo Markdown é criado com `create`.
+7. O atomicOS grava propriedades como `source`, `area`, `status`, `last_action` e `updated_at` com `property:set`.
+8. A nota aparece no Obsidian como um arquivo Markdown normal.
 
 ## Arquitetura
 
@@ -33,6 +37,9 @@ Interface desktop Flet
         -> Inferência local com Ollama
         -> Limpeza do Markdown
         -> Persistência via CLI do Obsidian
+            -> search
+            -> create ou append
+            -> property:set
             -> Vault do Obsidian
 ```
 
@@ -127,16 +134,19 @@ Se o Ollama estiver rodando em outra máquina, confirme que o servidor está ace
 
 ## CLI do Obsidian
 
-O atomicOS espera que a CLI do Obsidian suporte a criação de notas com:
+O atomicOS espera que a CLI do Obsidian suporte estes comandos:
 
 ```powershell
+obsidian search query="termo" path="Pasta" limit=10 format=json
 obsidian create path="Pasta/Nota.md" content="# Nota"
+obsidian append path="Pasta/Nota.md" content="Complemento"
+obsidian property:set path="Pasta/Nota.md" name="source" value="atomicOS" type=text
 ```
 
 Se o executável tiver outro nome ou caminho, configure:
 
 ```powershell
-$env:ATOMICOS_OBSIDIAN_EXECUTABLE = "C:\\caminho\\para\\obsidian.exe"
+$env:ATOMICOS_OBSIDIAN_EXECUTABLE = "C:\caminho\para\obsidian.exe"
 ```
 
 ## Smoke Test Sem Dependências Reais
@@ -157,4 +167,4 @@ python -m pytest
 
 ## Status do Projeto
 
-atomicOS é um protótipo local-first em estágio inicial, focado em um fluxo específico: sintetizar anotações soltas com um modelo local de IA e persistir o resultado no Obsidian. A implementação atual é intencionalmente pequena e pragmática, com testes cobrindo configuração, tratamento de respostas do Ollama, segurança de caminhos no Vault e comportamento do workflow.
+atomicOS é um protótipo local-first em estágio inicial, focado em um fluxo específico: sintetizar anotações soltas com um modelo local de IA e persistir o resultado no Obsidian. A implementação atual é intencionalmente pequena e pragmática, com testes cobrindo configuração, tratamento de respostas do Ollama, segurança de caminhos no Vault, persistência inteligente com `search`/`append`/`property:set` e comportamento do workflow.
