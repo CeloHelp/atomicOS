@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+from datetime import date
 
 import pytest
 
@@ -67,7 +68,7 @@ def test_build_target_rejects_unsafe_paths(tmp_path, folder, subfolder, title):
         manager.build_target(folder, subfolder, title)
 
 
-def test_create_note_invokes_cli_with_argument_array(tmp_path, caplog):
+def test_create_note_searches_creates_and_sets_default_properties(tmp_path, caplog):
     caplog.set_level(logging.INFO)
     calls = []
 
@@ -81,8 +82,27 @@ def test_create_note_invokes_cli_with_argument_array(tmp_path, caplog):
 
     assert relative == "Conhecimento/Java/SOLID.md"
     assert (tmp_path / "Conhecimento" / "Java").is_dir()
-    assert calls[0]["command"] == ["obsidian", "create", "path=Conhecimento/Java/SOLID.md", "content=# SOLID"]
+    assert calls[0]["command"] == ["obsidian", "search", "query=SOLID", "path=Conhecimento"]
+    assert calls[1]["command"] == ["obsidian", "create", "path=Conhecimento/Java/SOLID.md", "content=# SOLID"]
     assert calls[0]["kwargs"]["cwd"] == str(tmp_path)
+    assert [call["command"][1] for call in calls[2:]] == ["property:set"] * 5
+    assert calls[2]["command"] == [
+        "obsidian",
+        "property:set",
+        "path=Conhecimento/Java/SOLID.md",
+        "name=source",
+        "value=atomicOS",
+        "type=text",
+    ]
+    assert calls[5]["command"] == [
+        "obsidian",
+        "property:set",
+        "path=Conhecimento/Java/SOLID.md",
+        "name=last_action",
+        "value=created",
+        "type=text",
+    ]
+    assert calls[6]["command"][3:] == ["name=updated_at", f"value={date.today().isoformat()}", "type=date"]
     assert "obsidian cli succeeded" in caplog.text
     assert "Conhecimento/Java/SOLID.md" in caplog.text
     assert "# SOLID" not in caplog.text
@@ -100,11 +120,68 @@ def test_create_note_does_not_duplicate_md_extension(tmp_path):
     relative = manager.create_note("Conhecimento", "Java", "SOLID.md", "# SOLID")
 
     assert relative == "Conhecimento/Java/SOLID.md"
-    assert calls[0][2] == "path=Conhecimento/Java/SOLID.md"
+    assert calls[1][2] == "path=Conhecimento/Java/SOLID.md"
+
+
+def test_create_note_appends_when_search_returns_the_exact_target(tmp_path):
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append({"command": command, "kwargs": kwargs})
+        stdout = "Conhecimento/Java/SOLID.md\n" if command[1] == "search" else "ok"
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    manager = VaultManager(tmp_path, runner=runner)
+
+    relative = manager.create_note("Conhecimento", "Java", "SOLID", "# SOLID\n\nResumo novo")
+
+    assert relative == "Conhecimento/Java/SOLID.md"
+    assert calls[0]["command"] == ["obsidian", "search", "query=SOLID", "path=Conhecimento"]
+    assert calls[1]["command"] == [
+        "obsidian",
+        "append",
+        "path=Conhecimento/Java/SOLID.md",
+        "content=\n\n---\n\n# SOLID\n\nResumo novo",
+    ]
+    assert calls[5]["command"][3:5] == ["name=last_action", "value=appended"]
+
+
+def test_create_note_creates_when_search_result_is_not_the_exact_target(tmp_path):
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        stdout = "Conhecimento/Java/SOLID - antigo.md\n" if command[1] == "search" else "ok"
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    manager = VaultManager(tmp_path, runner=runner)
+
+    manager.create_note("Conhecimento", "Java", "SOLID", "# SOLID")
+
+    assert calls[1][1] == "create"
+
+
+def test_create_note_appends_when_target_exists_on_disk(tmp_path):
+    target = tmp_path / "Conhecimento" / "Java" / "SOLID.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("# SOLID")
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    manager = VaultManager(tmp_path, runner=runner)
+
+    manager.create_note("Conhecimento", "Java", "SOLID", "# Complemento")
+
+    assert calls[1][1] == "append"
 
 
 def test_create_note_reports_cli_failure(tmp_path, caplog):
     def runner(command, **kwargs):
+        if command[1] == "search":
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
         return subprocess.CompletedProcess(command, 2, stdout="x" * 600, stderr="boom")
 
     manager = VaultManager(tmp_path, runner=runner)
@@ -134,6 +211,8 @@ def test_create_note_removes_new_empty_directories_after_cli_failure(tmp_path):
 
 def test_create_note_reports_missing_cli(tmp_path, caplog):
     def runner(command, **kwargs):
+        if command[1] == "search":
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
         raise FileNotFoundError("obsidian")
 
     manager = VaultManager(tmp_path, runner=runner)

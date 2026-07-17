@@ -127,10 +127,16 @@ Se o Ollama estiver rodando em outra máquina, confirme que o servidor está ace
 
 ## CLI do Obsidian
 
-O atomicOS espera que a CLI do Obsidian suporte a criação de notas com:
+O atomicOS usa um fluxo de persistência `search -> create/append -> property:set`.
+Ele busca a nota na pasta selecionada, só anexa conteúdo quando encontra o mesmo
+caminho alvo (ou o arquivo já existe no Vault) e registra propriedades padrão
+após persistir.
 
 ```powershell
-obsidian create path="Pasta/Nota.md" content="# Nota"
+obsidian search query="SOLID" path="Conhecimento"
+obsidian create path="Conhecimento/Java/SOLID.md" content="# SOLID"
+obsidian append path="Conhecimento/Java/SOLID.md" content="..."
+obsidian property:set path="Conhecimento/Java/SOLID.md" name="source" value="atomicOS" type=text
 ```
 
 Se o executável tiver outro nome ou caminho, configure:

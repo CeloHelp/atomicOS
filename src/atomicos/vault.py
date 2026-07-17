@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path, PurePosixPath
 import subprocess
 from typing import Callable, Sequence
@@ -97,12 +98,88 @@ class VaultManager:
             )
             raise PersistenceError(f"Could not create target directories: {exc}") from exc
 
-        command = [
-            self.obsidian_executable,
-            "create",
-            f"path={target.relative_path}",
-            f"content={markdown}",
-        ]
+        try:
+            exists = self._search_existing_note(target, run_id=run_id)
+            action = self._persist_markdown(target, markdown, exists, run_id=run_id)
+            self._set_default_properties(target, action, run_id=run_id)
+        except PersistenceError:
+            _remove_empty_directories(created_directories, run_id=run_id)
+            raise
+
+        return target.relative_path
+
+    def _search_existing_note(self, target: NoteTarget, *, run_id: str | None = None) -> bool:
+        area = PurePosixPath(target.relative_path).parts[0]
+        title = PurePosixPath(target.relative_path).stem
+        result = self._run_cli(
+            [
+                self.obsidian_executable,
+                "search",
+                f"query={title}",
+                f"path={area}",
+            ],
+            run_id=run_id,
+        )
+        return self._target_exists_on_disk(target) or _search_output_contains_target(result.stdout, target)
+
+    def _persist_markdown(
+        self,
+        target: NoteTarget,
+        markdown: str,
+        exists: bool,
+        *,
+        run_id: str | None = None,
+    ) -> str:
+        action = "appended" if exists else "created"
+        content = f"\n\n---\n\n{markdown}" if exists else markdown
+        self._run_cli(
+            [
+                self.obsidian_executable,
+                "append" if exists else "create",
+                f"path={target.relative_path}",
+                f"content={content}",
+            ],
+            run_id=run_id,
+        )
+        return action
+
+    def _set_default_properties(
+        self,
+        target: NoteTarget,
+        action: str,
+        *,
+        run_id: str | None = None,
+    ) -> None:
+        area = PurePosixPath(target.relative_path).parts[0]
+        properties = (
+            ("source", "atomicOS", "text"),
+            ("area", area, "text"),
+            ("status", "sintetizado", "text"),
+            ("last_action", action, "text"),
+            ("updated_at", date.today().isoformat(), "date"),
+        )
+        for name, value, value_type in properties:
+            self._run_cli(
+                [
+                    self.obsidian_executable,
+                    "property:set",
+                    f"path={target.relative_path}",
+                    f"name={name}",
+                    f"value={value}",
+                    f"type={value_type}",
+                ],
+                run_id=run_id,
+            )
+
+    def _target_exists_on_disk(self, target: NoteTarget) -> bool:
+        return (target.absolute_parent / PurePosixPath(target.relative_path).name).is_file()
+
+    def _run_cli(
+        self,
+        command: list[str],
+        *,
+        run_id: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         timer = Timer.start()
         try:
             result = self.runner(
@@ -114,44 +191,40 @@ class VaultManager:
             )
         except OSError as exc:
             logger.exception(
-                "run_id=%s obsidian cli execution failed vault_root=%s relative_path=%s command=%s duration_ms=%s error=%s",
+                "run_id=%s obsidian cli execution failed vault_root=%s command=%s duration_ms=%s error=%s",
                 run_id,
                 self.vault_root,
-                target.relative_path,
                 sanitize_command(command),
                 timer.elapsed_ms(),
                 exc,
             )
             raise PersistenceError(f"Could not execute Obsidian CLI: {exc}") from exc
 
-        duration_ms = timer.elapsed_ms()
-        if result.returncode != 0:
-            _remove_empty_directories(created_directories, run_id=run_id)
-            logger.warning(
-                "run_id=%s obsidian cli failed vault_root=%s relative_path=%s command=%s returncode=%s duration_ms=%s stdout=%r stderr=%r",
+        if result.returncode == 0:
+            logger.info(
+                "run_id=%s obsidian cli succeeded vault_root=%s command=%s returncode=%s duration_ms=%s stdout=%r stderr=%r",
                 run_id,
                 self.vault_root,
-                target.relative_path,
                 sanitize_command(command),
                 result.returncode,
-                duration_ms,
+                timer.elapsed_ms(),
                 truncate_value(result.stdout),
                 truncate_value(result.stderr),
             )
-            cause = (result.stderr or result.stdout or "Obsidian CLI failed").strip()
-            raise PersistenceError(cause)
+            return result
 
-        logger.info(
-            "run_id=%s obsidian cli succeeded vault_root=%s relative_path=%s returncode=%s duration_ms=%s stdout=%r stderr=%r",
+        logger.warning(
+            "run_id=%s obsidian cli failed vault_root=%s command=%s returncode=%s duration_ms=%s stdout=%r stderr=%r",
             run_id,
             self.vault_root,
-            target.relative_path,
+            sanitize_command(command),
             result.returncode,
-            duration_ms,
+            timer.elapsed_ms(),
             truncate_value(result.stdout),
             truncate_value(result.stderr),
         )
-        return target.relative_path
+        cause = (result.stderr or result.stdout or "Obsidian CLI failed").strip()
+        raise PersistenceError(cause)
 
     def _existing_root(self) -> Path:
         if not self.vault_root.exists() or not self.vault_root.is_dir():
@@ -185,6 +258,15 @@ def _safe_title(title: str) -> str:
     if not safe.lower().endswith(".md"):
         safe = f"{safe}.md"
     return safe
+
+
+def _search_output_contains_target(output: str | None, target: NoteTarget) -> bool:
+    if not output:
+        return False
+    return any(
+        line.strip().strip("`\"'").replace("\\", "/") == target.relative_path
+        for line in output.splitlines()
+    )
 
 
 def _is_hidden_part(path: Path) -> bool:
