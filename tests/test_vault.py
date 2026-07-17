@@ -47,7 +47,18 @@ def test_build_target_returns_safe_nested_destination(tmp_path):
     )
 
     assert target.relative_path == "Conhecimento/Java/SOLID/Principios/Single Responsibility Principle.md"
+    assert target.parent_relative_path == "Conhecimento/Java/SOLID/Principios"
     assert target.absolute_parent == tmp_path.resolve() / "Conhecimento" / "Java" / "SOLID" / "Principios"
+    assert target.absolute_note == target.absolute_parent / "Single Responsibility Principle.md"
+
+
+def test_build_target_does_not_duplicate_markdown_extension(tmp_path):
+    (tmp_path / "Conhecimento").mkdir()
+    manager = VaultManager(tmp_path)
+
+    target = manager.build_target("Conhecimento", "", "Java - Records.md")
+
+    assert target.relative_path == "Conhecimento/Java - Records.md"
 
 
 @pytest.mark.parametrize(
@@ -67,12 +78,14 @@ def test_build_target_rejects_unsafe_paths(tmp_path, folder, subfolder, title):
         manager.build_target(folder, subfolder, title)
 
 
-def test_create_note_invokes_cli_with_argument_array(tmp_path, caplog):
+def test_create_note_searches_then_creates_and_sets_properties(tmp_path, caplog):
     caplog.set_level(logging.INFO)
     calls = []
 
     def runner(command, **kwargs):
         calls.append({"command": command, "kwargs": kwargs})
+        if command[1] == "search":
+            return subprocess.CompletedProcess(command, 0, stdout="[]", stderr="")
         return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
 
     manager = VaultManager(tmp_path, obsidian_executable="obsidian", runner=runner)
@@ -81,30 +94,70 @@ def test_create_note_invokes_cli_with_argument_array(tmp_path, caplog):
 
     assert relative == "Conhecimento/Java/SOLID.md"
     assert (tmp_path / "Conhecimento" / "Java").is_dir()
-    assert calls[0]["command"] == ["obsidian", "create", "path=Conhecimento/Java/SOLID.md", "content=# SOLID"]
+    assert calls[0]["command"] == [
+        "obsidian",
+        "search",
+        "query=SOLID",
+        "limit=10",
+        "format=json",
+        "path=Conhecimento/Java",
+    ]
+    assert calls[1]["command"] == ["obsidian", "create", "path=Conhecimento/Java/SOLID.md", "content=# SOLID"]
+    property_commands = [call["command"] for call in calls if call["command"][1] == "property:set"]
+    assert len(property_commands) == 5
+    assert ["obsidian", "property:set", "path=Conhecimento/Java/SOLID.md", "name=source", "value=atomicOS", "type=text"] in property_commands
+    assert ["obsidian", "property:set", "path=Conhecimento/Java/SOLID.md", "name=area", "value=Conhecimento", "type=text"] in property_commands
+    assert ["obsidian", "property:set", "path=Conhecimento/Java/SOLID.md", "name=last_action", "value=created", "type=text"] in property_commands
     assert calls[0]["kwargs"]["cwd"] == str(tmp_path)
-    assert "obsidian cli succeeded" in caplog.text
+    assert "obsidian create succeeded" in caplog.text
     assert "Conhecimento/Java/SOLID.md" in caplog.text
     assert "# SOLID" not in caplog.text
 
 
-def test_create_note_does_not_duplicate_md_extension(tmp_path):
+def test_create_note_appends_when_search_finds_existing_target(tmp_path):
     calls = []
 
     def runner(command, **kwargs):
         calls.append(command)
+        if command[1] == "search":
+            return subprocess.CompletedProcess(command, 0, stdout='["Conhecimento/Java/SOLID.md"]', stderr="")
         return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
 
     manager = VaultManager(tmp_path, runner=runner)
 
-    relative = manager.create_note("Conhecimento", "Java", "SOLID.md", "# SOLID")
+    relative = manager.create_note("Conhecimento", "Java", "SOLID", "# New SOLID")
 
     assert relative == "Conhecimento/Java/SOLID.md"
-    assert calls[0][2] == "path=Conhecimento/Java/SOLID.md"
+    assert calls[1][1] == "append"
+    assert calls[1][2] == "path=Conhecimento/Java/SOLID.md"
+    assert calls[1][3] == "content=\n\n---\n\n# New SOLID"
+    assert not any(command[1] == "create" for command in calls)
+    assert ["obsidian", "property:set", "path=Conhecimento/Java/SOLID.md", "name=last_action", "value=appended", "type=text"] in calls
+
+
+def test_create_note_appends_when_target_file_exists_even_if_search_is_empty(tmp_path):
+    (tmp_path / "Conhecimento" / "Java").mkdir(parents=True)
+    (tmp_path / "Conhecimento" / "Java" / "SOLID.md").write_text("# Existing", encoding="utf-8")
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        if command[1] == "search":
+            return subprocess.CompletedProcess(command, 0, stdout="[]", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    manager = VaultManager(tmp_path, runner=runner)
+
+    manager.create_note("Conhecimento", "Java", "SOLID", "# New SOLID")
+
+    assert calls[1][1] == "append"
+    assert not any(command[1] == "create" for command in calls)
 
 
 def test_create_note_reports_cli_failure(tmp_path, caplog):
     def runner(command, **kwargs):
+        if command[1] == "search":
+            return subprocess.CompletedProcess(command, 0, stdout="[]", stderr="")
         return subprocess.CompletedProcess(command, 2, stdout="x" * 600, stderr="boom")
 
     manager = VaultManager(tmp_path, runner=runner)
@@ -112,7 +165,7 @@ def test_create_note_reports_cli_failure(tmp_path, caplog):
     with pytest.raises(PersistenceError, match="boom"):
         manager.create_note("Conhecimento", "", "Note", "SECRET_MARKDOWN")
 
-    assert "obsidian cli failed" in caplog.text
+    assert "obsidian create failed" in caplog.text
     assert "<omitted>" in caplog.text
     assert "SECRET_MARKDOWN" not in caplog.text
     assert "truncated" in caplog.text
@@ -120,6 +173,8 @@ def test_create_note_reports_cli_failure(tmp_path, caplog):
 
 def test_create_note_removes_new_empty_directories_after_cli_failure(tmp_path):
     def runner(command, **kwargs):
+        if command[1] == "search":
+            return subprocess.CompletedProcess(command, 0, stdout="[]", stderr="")
         return subprocess.CompletedProcess(command, 2, stdout="", stderr="boom")
 
     (tmp_path / "Conhecimento").mkdir()
@@ -141,8 +196,7 @@ def test_create_note_reports_missing_cli(tmp_path, caplog):
     with pytest.raises(PersistenceError, match="execute Obsidian CLI"):
         manager.create_note("Conhecimento", "", "Note", "SECRET_MARKDOWN")
 
-    assert "obsidian cli execution failed" in caplog.text
-    assert "<omitted>" in caplog.text
+    assert "obsidian search execution failed" in caplog.text
     assert "SECRET_MARKDOWN" not in caplog.text
 
 
@@ -155,3 +209,12 @@ def test_create_note_logs_target_directory_creation_failure(tmp_path, caplog):
 
     assert "vault target directory creation failed" in caplog.text
     assert "Conhecimento" in caplog.text
+
+
+def test_search_notes_parses_plain_text_output(tmp_path):
+    def runner(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, stdout="Conhecimento/A.md\nConhecimento/B.md\n", stderr="")
+
+    manager = VaultManager(tmp_path, runner=runner)
+
+    assert manager.search_notes("Java", "Conhecimento") == ["Conhecimento/A.md", "Conhecimento/B.md"]
